@@ -333,22 +333,24 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   'use strict';
 
   // Ranges and selected values come from the Orafol "Percentage Framework" sheet.
+  // group = which posture setting moves the line (front / ongoing / tail).
+  // phase = when it can actually be billed: before you're on site, at site start, during progress, at closeout.
   const GENERAL = [
-    { id: 'safety', group: 'front', label: 'Safety & Site Startup', low: 0.25, sel: 0.50, high: 0.75, timing: 'Front',
-      guide: 'Bill as startup and safety obligations are performed, not just because the SOV is approved.' },
-    { id: 'mob', group: 'front', label: 'Mobilization', low: 0.50, sel: 0.80, high: 1.50, timing: 'Front',
-      guide: 'Bill when crews and equipment actually mobilize to site.' },
-    { id: 'submittals', group: 'front', label: 'Submittals', low: 0.50, sel: 0.75, high: 1.00, timing: 'Front',
+    { id: 'safety', group: 'front', phase: 'start', label: 'Safety & Site Startup', low: 0.25, sel: 0.50, high: 0.75, timing: 'Site start',
+      guide: 'Bill once you are on site and startup and safety obligations are under way. Not billable before mobilization.' },
+    { id: 'mob', group: 'front', phase: 'start', label: 'Mobilization', low: 0.50, sel: 0.80, high: 1.50, timing: 'Site start',
+      guide: 'Bill when crews and equipment are on site to begin the work.' },
+    { id: 'submittals', group: 'front', phase: 'precon', label: 'Submittals', low: 0.50, sel: 0.75, high: 1.00, timing: 'Before site',
       guide: 'Bill on completion or acceptance of the required submittals.' },
-    { id: 'insurance', group: 'front', label: 'Insurance & Contract Compliance', low: 0.50, sel: 1.00, high: 1.25, timing: 'Front',
+    { id: 'insurance', group: 'front', phase: 'precon', label: 'Insurance & Contract Compliance', low: 0.50, sel: 1.00, high: 1.25, timing: 'Before site',
       guide: 'Keep this supportable by actual project insurance and compliance cost. It is not a profit bucket.' },
-    { id: 'shops', group: 'front', label: 'Shop Drawings & Coordination', low: 0.75, sel: 1.20, high: 1.50, timing: 'Front',
+    { id: 'shops', group: 'front', phase: 'precon', label: 'Shop Drawings & Coordination', low: 0.75, sel: 1.20, high: 1.50, timing: 'Before site',
       guide: 'Bill as shop drawings and coordination are completed and accepted. State PE stamps and calcs as excluded when the contract excludes them.' },
-    { id: 'pm', group: 'ongoing', label: 'Project Management / Coordination', low: 2.50, sel: 3.11, high: 4.00, timing: 'Ongoing',
+    { id: 'pm', group: 'ongoing', phase: 'ongoing', label: 'Project Management / Coordination', low: 2.50, sel: 3.11, high: 4.00, timing: 'Monthly',
       guide: 'Bill pro rata over the active duration. Billing it early reads as overhead front-loading.' },
-    { id: 'cleanup', group: 'tail', label: 'Cleanup / Punch', low: 0.25, sel: 0.50, high: 0.75, timing: 'Tail',
+    { id: 'cleanup', group: 'tail', phase: 'tail', label: 'Cleanup / Punch', low: 0.25, sel: 0.50, high: 0.75, timing: 'Punch',
       guide: 'Hold for final cleanup and punch completion.' },
-    { id: 'closeout', group: 'tail', label: 'Closeout: O&M, As-Builts, Warranties, Lien Waivers', low: 0.50, sel: 0.50, high: 1.00, timing: 'Final',
+    { id: 'closeout', group: 'tail', phase: 'tail', label: 'Closeout: O&M, As-Builts, Warranties, Lien Waivers', low: 0.50, sel: 0.50, high: 1.00, timing: 'Closeout',
       guide: 'Bill when O&M manuals, as-builts, warranties and lien waivers are delivered. Final payment usually depends on it.' }
   ];
 
@@ -487,14 +489,15 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     // SOV lines in billing order.
     const lines = [];
     const add = (group, o) => lines.push(Object.assign({ group }, o));
-    if (bond > 0) add('front', { id: 'bond', desc: 'Payment & Performance Bond', value: bond, timing: 'Front', guide: BOND_GUIDE });
-    gen.filter(g => g.group === 'front' && g.value !== 0).forEach(g =>
-      add('front', { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
-    if (EQ > 0) add('ongoing', { id: 'equip', desc: EQUIP.label, value: EQ, timing: 'Ongoing', guide: EQUIP.guide });
-    gen.filter(g => g.group === 'ongoing' && g.value !== 0).forEach(g =>
-      add('ongoing', { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
+    const addGen = phase => gen.filter(g => g.phase === phase && g.value !== 0).forEach(g =>
+      add(phase, { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
+    if (bond > 0) add('precon', { id: 'bond', desc: 'Payment & Performance Bond', value: bond, timing: 'Before site', guide: BOND_GUIDE });
+    addGen('precon');
+    addGen('start');
+    if (EQ > 0) add('ongoing', { id: 'equip', desc: EQUIP.label, value: EQ, timing: 'With usage', guide: EQUIP.guide });
+    addGen('ongoing');
     sys.forEach((x, i) => {
-      if (mat[i] > 0) add('materials', { id: 'mat-' + x.idx, desc: x.name + ': Material', scope: x.scope, value: mat[i], timing: 'Front', guide: MAT_GUIDE, sys: x.idx });
+      if (mat[i] > 0) add('materials', { id: 'mat-' + x.idx, desc: x.name + ': Material', scope: x.scope, value: mat[i], timing: 'Stored / delivered', guide: MAT_GUIDE, sys: x.idx });
     });
     sys.forEach((x, i) => {
       if (labor[i] === 0 && x.L === 0) return;
@@ -502,23 +505,23 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
         const parts = allocate(labor[i], x.areas.map(a => a.w), 100);
         x.areas.forEach((a, k) => add('labor', {
           id: 'lab-' + x.idx + '-' + k, desc: x.name + ': Labor, ' + a.name, scope: x.scope,
-          value: parts[k], timing: 'Progress', guide: LAB_GUIDE, sys: x.idx
+          value: parts[k], timing: '% complete', guide: LAB_GUIDE, sys: x.idx
         }));
       } else {
-        add('labor', { id: 'lab-' + x.idx, desc: x.name + ': Labor', scope: x.scope, value: labor[i], timing: 'Progress', guide: LAB_GUIDE, sys: x.idx });
+        add('labor', { id: 'lab-' + x.idx, desc: x.name + ': Labor', scope: x.scope, value: labor[i], timing: '% complete', guide: LAB_GUIDE, sys: x.idx });
       }
     });
-    gen.filter(g => g.group === 'tail' && g.value !== 0).forEach(g =>
-      add('tail', { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
+    addGen('tail');
     lines.forEach((l, k) => { l.no = k + 1; });
 
     const sumBy = g => lines.filter(l => l.group === g).reduce((a, l) => a + l.value, 0);
-    const bucket = { front: sumBy('front'), materials: sumBy('materials'), ongoing: sumBy('ongoing'), labor: sumBy('labor'), tail: sumBy('tail') };
+    const bucket = { precon: sumBy('precon'), start: sumBy('start'), materials: sumBy('materials'), ongoing: sumBy('ongoing'), labor: sumBy('labor'), tail: sumBy('tail') };
+    // In billing order: what you can bill before you're on site, at site start, as work progresses, at closeout.
     const buckets = [
-      { key: 'front', label: 'Front-end lines', value: bucket.front },
+      { key: 'precon', label: 'Precon lines', value: bucket.precon },
       { key: 'materials', label: 'Materials', value: bucket.materials },
-      { key: 'ongoing', label: 'Equipment & PM', value: bucket.ongoing },
-      { key: 'labor', label: 'Field labor', value: bucket.labor },
+      { key: 'start', label: 'Site start', value: bucket.start },
+      { key: 'progress', label: 'Labor, equipment & PM', value: bucket.labor + bucket.ongoing },
       { key: 'tail', label: 'Cleanup & closeout', value: bucket.tail }
     ];
 
@@ -530,14 +533,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const m = sumM > 0 ? sumMat / sumM - 1 : 0; // blended material markup
     const pmValue = gen.find(g => g.id === 'pm').value;
 
-    const frontBillable = bucket.front + bucket.materials;
-    const btf = C - frontBillable;
+    const preSite = bucket.precon + bucket.materials;   // billable before you're on site (materials only if stored material is paid)
+    const atStart = preSite + bucket.start;              // most you can have billed before any installation is earned
+    const btf = C - atStart;
     const remCost = sumL + sumE;
     const btfCov = remCost > 0 ? btf / remCost : null;
     const retainage = Math.round(C * retPct);
 
     const spread = [
-      { key: 'front', label: 'Front-end lines', value: bucket.front, early: true },
+      { key: 'precon', label: 'Precon lines', value: bucket.precon, early: true },
+      { key: 'start', label: 'Site start lines', value: bucket.start, early: true },
       { key: 'matMarkup', label: 'Material markup', value: sumMat - sumM, early: true },
       { key: 'pm', label: 'Project management', value: pmValue },
       { key: 'eqMarkup', label: 'Equipment markup', value: EQ - sumE },
@@ -606,9 +611,9 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
     if (btfCov !== null) {
       const cmp = { kind: 'btf', a: btf, b: remCost };
-      if (btfCov < 1) chk('fix', 'Balance to finish is short of field cost', 'After the front-end lines and materials are billed, what is left won\'t pay for the remaining labor and equipment. That is the textbook overloaded SOV.', { cmp });
-      else if (btfCov < 1.10) chk('watch', 'Balance to finish is tight', 'What is left after front billing barely covers remaining labor and equipment. A GC or surety would see little room to replace you if the job stalled.', { cmp });
-      else chk('ok', 'Balance to finish covers field cost', 'What is left after front billing pays remaining labor and equipment with room to spare.', { cmp });
+      if (btfCov < 1) chk('fix', 'Balance to finish is short of field cost', 'Once precon lines, materials and site start are billed, what is left won\'t pay for the labor and equipment still to come. That is the textbook overloaded SOV.', { cmp });
+      else if (btfCov < 1.10) chk('watch', 'Balance to finish is tight', 'Once precon lines, materials and site start are billed, what is left barely covers the labor and equipment still to come. A GC or surety would see little room to replace you if the job stalled.', { cmp });
+      else chk('ok', 'Balance to finish covers field cost', 'Once precon lines, materials and site start are billed, what is left pays the labor and equipment still to come with room to spare.', { cmp });
     }
 
     if (bond > 0 && bond / C > 0.03) chk('watch', 'Bond line is ' + (bond / C * 100).toFixed(2) + '% of the contract', 'That is high for a P&P bond premium. Bill it only at the amount on the surety invoice.');
@@ -624,7 +629,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     return {
       empty: false, C, total, cents, posture: isCustom ? 'custom' : posture, isCustom, pct,
       m, mHi, mLo, mHiBy, uniform, held, mTarget, mMax, mMaxBy, matCap, matComfort, floorPct: f, eqMarkup: e, retPct,
-      sumM, sumL, sumE, sumP, EQ, bond, gen, lines, buckets, frontBillable, btf, remCost, btfCov,
+      sumM, sumL, sumE, sumP, EQ, bond, gen, lines, buckets, preSite, atStart, btf, remCost, btfCov,
       retainage, spread, pulled, sysRows, checks, counts, badSys
     };
   }
@@ -768,9 +773,9 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   }
   function postureNote() {
     const s = state.settings;
-    if (R.posture === 'conservative') return 'Front-end lines at the low end of your ranges, more held back for cleanup and closeout, 5% material markup target.';
+    if (R.posture === 'conservative') return 'Precon and site-start lines at the low end of your ranges, more held back for cleanup and closeout, 5% material markup target.';
     if (R.posture === 'balanced') return 'Your framework\'s selected percentages with a 10% material markup target.';
-    if (R.posture === 'max') return 'Front-end lines at the top of their ranges, material markup target at your ' + pctTxt(s.matCap) + ' cap.';
+    if (R.posture === 'max') return 'Precon and site-start lines at the top of their ranges, material markup target at your ' + pctTxt(s.matCap) + ' cap.';
     return 'Your own percentages and markup target. Review still checks every guardrail.';
   }
   function markupStepper() {
@@ -792,8 +797,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       '<div class="hero-num">' + money(R.C, R.cents) + '</div>' +
       '<p class="note">' + R.sysRows.length + ' system' + (R.sysRows.length === 1 ? '' : 's') + ' · ' + R.lines.length + ' SOV lines</p>' +
       '<div class="tiles">' +
-      '<div class="tile"><div class="t-lbl">Billable up front</div><div class="t-num">' + pc1(R.frontBillable / R.C) + '</div><div class="t-sub">' + money(R.frontBillable) + ' in front-end lines and materials</div></div>' +
-      '<div class="tile"><div class="t-lbl">Left to finish</div><div class="t-num">' + (cov === null ? '—' : cov.toFixed(2) + '×') + ' ' + (cov === null ? '' : statusIcon(lvl)) + '</div><div class="t-sub">' + money(R.btf) + ' against ' + money(R.remCost) + ' labor + equipment cost</div></div>' +
+      '<div class="tile"><div class="t-lbl">Before site start</div><div class="t-num">' + pc1(R.preSite / R.C) + '</div><div class="t-sub">' + money(R.preSite) + ' in precon lines and stored materials</div></div>' +
+      '<div class="tile"><div class="t-lbl">Left to finish</div><div class="t-num">' + (cov === null ? '—' : cov.toFixed(2) + '×') + ' ' + (cov === null ? '' : statusIcon(lvl)) + '</div><div class="t-sub">' + money(R.btf) + ' left after mobilization vs ' + money(R.remCost) + ' labor + equipment</div></div>' +
       '<div class="tile"><div class="t-lbl">Retainage held</div><div class="t-num">' + money(R.retainage) + '</div><div class="t-sub">' + pctTxt(state.settings.retainage) + ' of each billing until closeout</div></div>' +
       '</div>';
   }
@@ -810,10 +815,11 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       '<div class="flowbar" aria-hidden="true">' + segs + '<div class="flow-tip" hidden></div></div>' +
       '<div class="legend">' + legend + '</div></div>';
   }
-  const GROUPS = [['front', 'Front end'], ['ongoing', 'Ongoing'], ['materials', 'Materials'], ['labor', 'Field labor'], ['tail', 'Closeout']];
+  const GROUPS = [['precon', 'Preconstruction'], ['start', 'Site start'], ['ongoing', 'Ongoing'], ['materials', 'Materials'], ['labor', 'Field labor'], ['tail', 'Closeout']];
   function row(l) {
     const open = ui.expanded.has(l.id);
-    const chip = l.timing === 'Front' ? '<span class="chip front">Front</span>' : '<span class="chip">' + esc(l.timing) + '</span>';
+    const preSite = l.group === 'precon' || l.group === 'materials'; // billable before you're on site
+    const chip = '<span class="chip' + (preSite ? ' front' : '') + '">' + esc(l.timing) + '</span>';
     return '<div class="row" role="button" tabindex="0" aria-expanded="' + open + '" data-line="' + esc(l.id) + '">' +
       '<span class="no">' + l.no + '</span>' +
       '<span class="d"><span class="d1">' + esc(l.desc) + '</span><span class="d2">' + chip + (l.scope ? '<span>' + esc(l.scope) + '</span>' : '') + '</span></span>' +
@@ -874,7 +880,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const P = R.sumP;
     h += '<div class="card"><div class="eyebrow">Where your OH&amp;P goes</div>';
     h += P > 0
-      ? '<p class="lead">' + pc(R.pulled / P, 0) + ' of your ' + money(P) + ' OH&amp;P sits in lines you can bill early: front-end lines plus material markup.</p>'
+      ? '<p class="lead">' + pc(R.pulled / P, 0) + ' of your ' + money(P) + ' OH&amp;P is billed before any installation is earned: precon lines, site-start lines and material markup.</p>'
       : '<p class="lead">No OH&amp;P entered, so every general line is coming out of cost.</p>';
     R.spread.forEach(s => {
       const w = P > 0 ? Math.max(0, Math.min(1, s.value / P)) : 0;
