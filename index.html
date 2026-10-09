@@ -186,6 +186,18 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 .tie { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 9px 10px; border-radius: 9px; background: var(--surface-2); font-size: 13.5px; color: var(--ink-2); }
 .tie .tie-txt { flex: 1 1 150px; min-width: 0; }
 .tie .btn { min-height: 36px; padding: 6px 10px; font-size: 13.5px; }
+.total-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 172px); gap: 12px; align-items: center; }
+.sys .tie { margin-top: 0; }
+.x-title { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-2); font-weight: 600; font-size: 14.5px; }
+.x-row { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line-2); }
+.x-title + .x-row { border-top: 0; padding-top: 8px; }
+.x-top { display: flex; align-items: center; gap: 8px; }
+.x-top .txt { flex: 1 1 auto; }
+.x-bot { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; }
+.x-add { padding-top: 12px; border-top: 1px solid var(--line-2); }
+.sel { position: relative; min-width: 0; }
+.sel select { appearance: none; -webkit-appearance: none; padding-right: 34px; cursor: pointer; }
+.sel::after { content: ""; position: absolute; right: 14px; top: 50%; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .hero-tie { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-size: 14px; font-weight: 500; color: var(--ink-2); }
 
 /* KPIs */
@@ -367,6 +379,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   const MAT_GUIDE = 'Carries material cost, sales tax and the material share of profit. Bill as material is procured, stored or delivered; expect the GC to ask for invoices, bills of lading and stored-material insurance.';
   const LAB_GUIDE = 'Bill by measurable installed percent complete.';
 
+  // Lines the user adds in Settings. They bill by the phase picked for them and, like every general line, are paid for by overhead.
+  const PHASE_TIMING = { precon: 'Before site', start: 'Site start', ongoing: 'Ongoing', tail: 'Closeout' };
+  const PHASE_GUIDE = {
+    precon: 'Bill when this work is done and accepted, before you are on site.',
+    start: 'Bill once you are on site and this work is under way.',
+    ongoing: 'Bill in step with progress over the active duration.',
+    tail: 'Bill at closeout, once this item is complete.'
+  };
+  const MAX_FRONT_HIGH = Math.max.apply(null, GENERAL.filter(g => g.group === 'front').map(g => g.high));
+
   const POSTURES = {
     conservative: { label: 'Conservative', front: 'low', tail: 'high', pm: 'sel' },
     balanced: { label: 'Balanced', front: 'sel', tail: 'sel', pm: 'sel' },
@@ -453,6 +475,13 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     return out;
   }
 
+  function cleanExtra(extra) {
+    return (Array.isArray(extra) ? extra : []).map((x, i) => ({
+      i, name: String((x && x.name) || '').trim() || 'General item ' + (i + 1),
+      pct: Math.max(0, num(x && x.pct)), phase: PHASE_TIMING[x && x.phase] ? x.phase : 'ongoing'
+    }));
+  }
+
   function cleanAreas(areas) {
     return (Array.isArray(areas) ? areas : [])
       .filter(a => a && String(a.name || '').trim())
@@ -492,8 +521,9 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
     // General lines: % of the SOV total, rounded to the chosen unit. Overhead is what pays for them.
     const gen = GENERAL.map(g => Object.assign({}, g, { pct: pct[g.id], value: roundTo(C * pct[g.id] / 100, R) }));
+    const extra = cleanExtra(input.extra).map(x => Object.assign(x, { value: roundTo(C * x.pct / 100, R) }));
     const bond = Math.max(0, toCents(s.bond));
-    const G = gen.reduce((a, g) => a + g.value, 0) + bond;
+    const G = gen.reduce((a, g) => a + g.value, 0) + extra.reduce((a, x) => a + x.value, 0) + bond;
     const Galloc = allocate(G, sys.map(x => x.V), 100); // pro-rata by system value, like the Orafol reconciliation
 
     // Profit rides on each cost line in proportion to its cost. Tax stays with material, unmarked.
@@ -510,8 +540,12 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     // SOV lines in billing order.
     const lines = [];
     const add = (group, o) => lines.push(Object.assign({ group }, o));
-    const addGen = phase => gen.filter(g => g.phase === phase && g.value !== 0).forEach(g =>
-      add(phase, { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
+    const addGen = phase => {
+      gen.filter(g => g.phase === phase && g.value !== 0).forEach(g =>
+        add(phase, { id: g.id, desc: g.label, value: g.value, timing: g.timing, guide: g.guide }));
+      extra.filter(x => x.phase === phase && x.value !== 0).forEach(x =>
+        add(phase, { id: 'x-' + x.i, desc: x.name, value: x.value, timing: PHASE_TIMING[phase], guide: PHASE_GUIDE[phase], custom: true }));
+    };
     if (bond > 0) add('precon', { id: 'bond', desc: 'Payment & Performance Bond', value: bond, timing: 'Before site', guide: BOND_GUIDE });
     addGen('precon');
     addGen('start');
@@ -548,9 +582,6 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
     const tot = k => sys.reduce((a, x) => a + x[k], 0);
     const sumM = tot('M'), sumL = tot('L'), sumE = tot('E'), sumOH = tot('OH'), sumPR = tot('PR'), sumTAX = tot('TAX');
-    const sumMat = mat.reduce((a, b) => a + b, 0);
-    const sumLab = labor.reduce((a, b) => a + b, 0);
-    const pmValue = gen.find(g => g.id === 'pm').value;
 
     const preSite = bucket.precon + bucket.materials;   // billable before you're on site (materials only if stored material is paid)
     const atStart = preSite + bucket.start;              // most you can have billed before any installation is earned
@@ -559,17 +590,6 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const btfCov = remCost > 0 ? btf / remCost : null;
     const retainage = Math.round(C * retPct);
 
-    const markup = C - sumM - sumTAX - sumL - sumE; // overhead + profit (+ sub-dollar rounding)
-    const spread = [
-      { key: 'precon', label: 'Precon lines', value: bucket.precon, early: true },
-      { key: 'start', label: 'Site start lines', value: bucket.start, early: true },
-      { key: 'matProfit', label: 'Profit on material', value: sumMat - sumM - sumTAX, early: true },
-      { key: 'pm', label: 'Project management', value: pmValue },
-      { key: 'eqProfit', label: 'Profit on equipment', value: EQ - sumE },
-      { key: 'laborMargin', label: 'Labor margin', value: sumLab - sumL },
-      { key: 'tail', label: 'Cleanup & closeout', value: bucket.tail }
-    ];
-    const pulled = spread.filter(x => x.early).reduce((a, x) => a + x.value, 0);
 
     const sysRows = sys.map((x, i) => ({
       idx: x.idx, name: x.name, scope: x.scope, V: x.V, price: x.price, M: x.M, L: x.L, E: x.E, OH: x.OH, PR: x.PR, TAX: x.TAX,
@@ -652,6 +672,11 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       }
     });
     if (!rangeIssues) chk('ok', 'General lines inside your framework ranges', 'Every percentage-based line sits between its low and high value.');
+    extra.forEach(x => {
+      if ((x.phase === 'precon' || x.phase === 'start') && x.pct > MAX_FRONT_HIGH + 1e-9) chk('watch',
+        x.name + ' at ' + x.pct.toFixed(2) + '% is bigger than any front-end line in your framework',
+        'Your framework tops out at ' + MAX_FRONT_HIGH.toFixed(2) + '% for a single front-end line. A GC reviewer is likely to ask what this covers.', { line: 'x-' + x.i });
+    });
 
     if (sumE === 0) chk('watch', 'No equipment entered', 'Most cladding scopes need lifts or hoisting. If equipment is buried in labor, the labor lines carry it instead.');
     else {
@@ -680,12 +705,12 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     return {
       empty: false, C, total, cents, contract, posture: isCustom ? 'custom' : posture, isCustom, pct,
       matCap, matComfort, floorPct: f, retPct, taxRate,
-      sumM, sumL, sumE, sumOH, sumPR, sumTAX, markup, EQ, bond, G, gen, lines, buckets, preSite, atStart, btf, remCost, btfCov,
-      retainage, spread, pulled, sysRows, checks, counts, badSys
+      sumM, sumL, sumE, sumOH, sumPR, sumTAX, EQ, bond, G, gen, extra, lines, buckets, preSite, atStart, btf, remCost, btfCov,
+      retainage, sysRows, checks, counts, badSys
     };
   }
 
-  const api = { GENERAL, EQUIP, POSTURES, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, allocate, toCents };
+  const api = { GENERAL, EQUIP, POSTURES, PHASE_TIMING, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, allocate, toCents };
   root.SOVEngine = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -725,15 +750,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   const LEVEL_WORD = { ok: 'OK', watch: 'Watch', fix: 'Fix' };
   const statusIcon = lvl => '<span class="sic ' + lvl + '" role="img" aria-label="' + LEVEL_WORD[lvl] + '">' + GLYPH[lvl] + '</span>';
 
-  const blankSystem = () => ({ name: '', scope: '', total: 0, M: 0, L: 0, E: 0, oh: 0, pr: 0, areas: [] });
+  const blankSystem = () => ({ name: '', total: 0, M: 0, L: 0, E: 0, oh: 0, pr: 0, areas: [] });
+  const blankExtra = () => ({ name: '', pct: 0, phase: 'ongoing' });
   const exampleState = () => ({
     v: 2, isExample: true, tab: 'sov', project: 'Example: Warehouse Addition', contract: 599687,
-    posture: 'balanced', custom: null, settings: Object.assign({}, E.DEFAULT_SETTINGS),
+    posture: 'balanced', custom: null, settings: Object.assign({}, E.DEFAULT_SETTINGS), extra: [],
     systems: [
-      { name: 'Insulated Metal Panels (IMP)', scope: 'Base Bid', total: 427282, M: 212000, L: 118000, E: 12000, oh: 10, pr: 10,
+      { name: 'Insulated Metal Panels (IMP)', total: 427282, M: 212000, L: 118000, E: 12000, oh: 10, pr: 10,
         areas: [{ name: 'North Elevation', w: 35 }, { name: 'West Elevation', w: 25 }, { name: 'South Elevation', w: 40 }] },
-      { name: 'Fiber Cement Panels', scope: 'Alt #1', total: 150360, M: 48000, L: 71000, E: 5000, oh: 10, pr: 8, areas: [] },
-      { name: 'Aluminum Canopy', scope: 'Alt #2', total: 22045, M: 11800, L: 5200, E: 600, oh: 10, pr: 10, areas: [] }
+      { name: 'Fiber Cement Panels', total: 150360, M: 48000, L: 71000, E: 5000, oh: 10, pr: 8, areas: [] },
+      { name: 'Aluminum Canopy', total: 22045, M: 11800, L: 5200, E: 600, oh: 10, pr: 10, areas: [] }
     ]
   });
 
@@ -745,11 +771,11 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       v: 2, isExample: false, tab: s.tab, project: s.project || '', contract: 0,
       posture: s.posture === 'custom' && s.custom ? 'custom' : (E.POSTURES[s.posture] ? s.posture : 'balanced'),
       custom: s.custom ? { pct: s.custom.pct || {} } : null,
-      settings: Object.assign({}, E.DEFAULT_SETTINGS, keep),
+      settings: Object.assign({}, E.DEFAULT_SETTINGS, keep), extra: [],
       systems: s.systems.map(x => {
         x = x || {};
         const cost = (+x.M || 0) + (+x.L || 0) + (+x.E || 0);
-        return { name: x.name || '', scope: x.scope || '', total: 0, M: +x.M || 0, L: +x.L || 0, E: +x.E || 0, oh: 0,
+        return { name: x.name || '', total: 0, M: +x.M || 0, L: +x.L || 0, E: +x.E || 0, oh: 0,
           pr: cost > 0 ? Math.round((+x.P || 0) / cost * 1e6) / 1e4 : 0, areas: Array.isArray(x.areas) ? x.areas : [] };
       })
     };
@@ -763,6 +789,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       if (s.v === 1) { if (s.isExample) return null; s = migrateV1(s); }
       if (s.v !== 2) return null;
       s.settings = Object.assign({}, E.DEFAULT_SETTINGS, s.settings || {});
+      s.extra = Array.isArray(s.extra) ? s.extra.filter(x => x && typeof x === 'object').map(x => Object.assign(blankExtra(), x)) : [];
       s.systems = s.systems.map(x => Object.assign(blankSystem(), x, { areas: Array.isArray(x && x.areas) ? x.areas : [] }));
       if (!s.systems.length) s.systems.push(blankSystem());
       if (TABS.indexOf(s.tab) < 0) s.tab = 'systems';
@@ -815,11 +842,12 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       '<div class="sys-head"><div class="field"><label for="sys-name-' + i + '">System ' + (i + 1) + '</label>' +
       '<input class="txt strong" id="sys-name-' + i + '" data-k="name" list="sys-names" autocomplete="off" placeholder="Insulated Metal Panels (IMP)" value="' + esc(s.name) + '"></div>' +
       '<button type="button" class="icon-btn" data-act="remove-system" aria-label="Remove system ' + (i + 1) + '">' + ICON.x + '</button></div>' +
-      '<div class="grid2"><div class="field"><label for="sys-scope-' + i + '">Contract scope</label><input class="txt" id="sys-scope-' + i + '" data-k="scope" autocomplete="off" placeholder="Base Bid, Alt #3…" value="' + esc(s.scope) + '"></div>' +
-      moneyField(i, 'total', 'System total', s.total) + '</div>' +
       '<div class="grid2">' + moneyField(i, 'M', 'Material', s.M) + moneyField(i, 'L', 'Labor', s.L) + moneyField(i, 'E', 'Equipment / fixed', s.E) +
       '<div class="pair">' + pctField(i, 'oh', 'Overhead', s.oh) + pctField(i, 'pr', 'Profit', s.pr) + '</div></div>' +
-      '<div class="recap" id="sys-recap-' + i + '" aria-live="polite"></div>' +
+      '<div class="recap" id="sys-recap-' + i + '"></div>' +
+      '<div class="total-in"><label for="sys-total-' + i + '" class="set-name">System total<span class="set-hint">Awarded value to check the price against</span></label>' +
+      '<div class="inp"><span class="pre">$</span><input id="sys-total-' + i + '" data-k="total" data-money inputmode="decimal" autocomplete="off" placeholder="0.00" value="' + esc(moneyInput(s.total)) + '"></div></div>' +
+      '<div id="sys-tie-' + i + '" aria-live="polite"></div>' +
       '<details class="areas" data-i="' + i + '"' + (open ? ' open' : '') + '><summary>Split labor by area</summary>' +
       '<div class="area-list">' + areas +
       '<div><button type="button" class="btn small" data-act="add-area">' + ICON.plus + ' Add area</button></div>' +
@@ -836,11 +864,17 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       '<div class="rc"><span>Sales tax ' + trim4(tr) + '% on material</span><span>' + money2(p.TAX) + '</span></div>' +
       '<div class="rc tot"><span>System price</span><span>' + money2(p.price) + '</span></div>';
     if (p.price !== p.V) h += '<div class="rc sub"><span>Rounded for the SOV</span><span>' + money2(p.V) + '</span></div>';
+    return h;
+  }
+  function tieHTML(s) {
+    const tr = taxRate();
+    const p = E.priceSystem(s, tr);
+    if (p.Sub <= 0) return '';
     const T = E.toCents(s.total);
-    if (!T) return h + '<div class="tie"><span class="tie-txt">Enter the system total to check this estimate against it.</span></div>';
-    if (T === p.V) return h + '<div class="tie">' + statusIcon('ok') + '<span class="tie-txt">Ties to the ' + moneyAuto(T) + ' system total' + (R && !R.empty ? ', ' + pc1(p.V / R.C) + ' of the SOV' : '') + '.</span></div>';
+    if (!T) return '<div class="tie"><span class="tie-txt">Enter the system total to check this price against it.</span></div>';
+    if (T === p.V) return '<div class="tie">' + statusIcon('ok') + '<span class="tie-txt">Ties to the ' + moneyAuto(T) + ' system total' + (R && !R.empty ? ', ' + pc1(p.V / R.C) + ' of the SOV' : '') + '.</span></div>';
     const tp = E.tieProfit(s, tr, T / 100);
-    return h + '<div class="tie">' + statusIcon('fix') + '<span class="tie-txt">' + offTxt(p.V, T) + ' the ' + moneyAuto(T) + ' system total.</span>' +
+    return '<div class="tie">' + statusIcon('fix') + '<span class="tie-txt">' + offTxt(p.V, T) + ' the ' + moneyAuto(T) + ' system total.</span>' +
       (tp !== null ? '<button type="button" class="btn small" data-act="tie-profit" data-p="' + tp + '">Set profit to ' + tp + '%</button>'
         : '<span class="note">Profit alone can\'t close this gap. Check the costs and overhead.</span>') + '</div>';
   }
@@ -863,7 +897,10 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     updateRecaps();
   }
   function updateRecaps() {
-    state.systems.forEach((s, i) => { const el = $('#sys-recap-' + i); if (el) el.innerHTML = recapHTML(s); });
+    state.systems.forEach((s, i) => {
+      const el = $('#sys-recap-' + i); if (el) el.innerHTML = recapHTML(s);
+      const tie = $('#sys-tie-' + i); if (tie) tie.innerHTML = tieHTML(s);
+    });
     const ct = $('#contract-tie');
     if (ct) ct.innerHTML = contractTieHTML();
   }
@@ -917,7 +954,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const chip = '<span class="chip' + (preSite ? ' front' : '') + '">' + esc(l.timing) + '</span>';
     return '<div class="row" role="button" tabindex="0" aria-expanded="' + open + '" data-line="' + esc(l.id) + '">' +
       '<span class="no">' + l.no + '</span>' +
-      '<span class="d"><span class="d1">' + esc(l.desc) + '</span><span class="d2">' + chip + (l.scope ? '<span>' + esc(l.scope) + '</span>' : '') + '</span></span>' +
+      '<span class="d"><span class="d1">' + esc(l.desc) + '</span><span class="d2">' + chip + '</span></span>' +
       '<span class="v' + (l.value < 0 ? ' neg' : '') + '">' + money(l.value, R.cents) + '<span class="p">' + pc(l.value / R.C) + '</span></span>' +
       '<span class="guide"' + (open ? '' : ' hidden') + '>' + esc(l.guide) + '</span></div>';
   }
@@ -969,23 +1006,12 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const n = R.counts;
     const lvl = n.fix ? 'fix' : n.watch ? 'watch' : 'ok';
     const head = n.fix ? n.fix + ' to fix' + (n.watch ? ' · ' + n.watch + ' to watch' : '') : n.watch ? n.watch + ' to watch' : 'All checks pass';
+    const open = R.checks.filter(c => c.level !== 'ok');
     let h = '<div class="card"><div class="sum-line">' + statusIcon(lvl) + '<span>' + head + '</span></div>' +
-      '<p class="note" style="margin-top:6px">These are the questions a GC reviewer is most likely to ask. Clear the Fix items before you submit.</p></div>';
-    h += '<div class="card checks">' + R.checks.map(checkRow).join('') + '</div>';
-
-    const mk = R.markup;
-    h += '<div class="card"><div class="eyebrow">Where your overhead and profit go</div>';
-    h += R.sumOH >= R.G
-      ? '<p class="lead">Your ' + money(R.sumOH) + ' of overhead covers the ' + money(R.G) + ' of general lines, with ' + money(R.sumOH - R.G) + ' left over for labor.'
-      : '<p class="lead">Your ' + money(R.sumOH) + ' of overhead is ' + money(R.G - R.sumOH) + ' short of the ' + money(R.G) + ' of general lines, so labor covers the gap.';
-    h += mk > 0 ? ' ' + pc(R.pulled / mk, 0) + ' of your ' + money(mk) + ' overhead and profit is billed before any installation is earned.</p>' : '</p>';
-    R.spread.forEach(s => {
-      const w = mk > 0 ? Math.max(0, Math.min(1, s.value / mk)) : 0;
-      h += '<div class="sp-row' + (s.early ? ' early' : '') + '"><span class="sp-name">' + esc(s.label) + (s.early ? ' <span class="chip front">Early</span>' : '') + '</span>' +
-        '<span class="sp-val' + (s.value < 0 ? ' neg' : '') + '">' + money(s.value) + '<span class="p">' + (mk > 0 ? pc1(s.value / mk) : '') + '</span></span>' +
-        '<span class="sp-bar"><i style="width:' + (w * 100).toFixed(2) + '%"></i></span></div>';
-    });
-    h += '<p class="note" style="margin-top:10px">Overhead pays for the general lines. Profit is spread over material, equipment and labor in proportion to cost. Sales tax rides with material and isn\'t marked up.</p></div>';
+      '<p class="note" style="margin-top:6px">' + (open.length
+        ? 'Only items that need attention are listed. Clear the Fix items before you submit.'
+        : 'Nothing for a GC reviewer to question. Checks that pass aren\'t listed.') + '</p></div>';
+    if (open.length) h += '<div class="card checks">' + open.map(checkRow).join('') + '</div>';
 
     h += '<div class="card"><div class="eyebrow">Scope reconciliation</div><p class="note" style="margin-top:4px">Each system\'s lines plus its share of the shared lines add back to its price. Same test as the Scope Reconciliation sheet.</p>';
     R.sysRows.forEach(r => {
@@ -994,7 +1020,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       if (r.tie === true) tie = '<div class="rc-cov">' + statusIcon('ok') + ' Ties to the ' + moneyAuto(r.T) + ' system total</div>';
       else if (r.tie === false) tie = '<div class="rc-cov">' + statusIcon('fix') + ' ' + offTxt(r.V, r.T) + ' the ' + moneyAuto(r.T) + ' system total</div>';
       else tie = '<div class="rc-cov">No system total entered</div>';
-      h += '<div class="recon"><div class="rc-head"><span class="rc-name">' + esc(r.name) + (r.scope ? '<span class="rc-scope">' + esc(r.scope) + '</span>' : '') + '</span><span class="rc-v">' + money(r.V, R.cents) + '</span></div><dl>' +
+      h += '<div class="recon"><div class="rc-head"><span class="rc-name">' + esc(r.name) + '</span><span class="rc-v">' + money(r.V, R.cents) + '</span></div><dl>' +
         '<dt>Material' + (r.M > 0 ? ' <span class="muted">(with tax, ' + pc1(r.mk) + ' over invoice)</span>' : '') + '</dt><dd>' + money(r.mat, R.cents) + '</dd>' +
         '<dt>Labor' + (r.areas ? ' <span class="muted">(' + r.areas + ' areas)</span>' : '') + '</dt><dd' + (r.labor < 0 ? ' class="neg"' : '') + '>' + money(r.labor, R.cents) + '</dd>' +
         '<dt>Equipment share</dt><dd>' + money(r.eq, R.cents) + '</dd>' +
@@ -1016,6 +1042,17 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     return '<div class="set-row"><label for="' + id + '" class="set-name">' + label + '<span class="set-hint">' + hint + '</span></label>' +
       '<div class="inp">' + (prefix ? '<span class="pre">' + prefix + '</span>' : '') + '<input id="' + id + '" ' + attrs + ' inputmode="decimal" autocomplete="off" value="' + esc(value) + '">' + (suffix ? '<span class="suf">' + suffix + '</span>' : '') + '</div></div>';
   }
+  const PHASES = [['precon', 'Bills before site'], ['start', 'Bills at site start'], ['ongoing', 'Bills with progress'], ['tail', 'Bills at closeout']];
+  const MAX_FRONT = Math.max.apply(null, E.GENERAL.filter(g => g.group === 'front').map(g => g.high)).toFixed(2);
+  function extraRow(x, k) {
+    return '<div class="x-row" data-x="' + k + '">' +
+      '<div class="x-top"><input class="txt" id="x-name-' + k + '" data-xk="name" aria-label="Line name" placeholder="Field Verification &amp; Layout" autocomplete="off" value="' + esc(x.name) + '">' +
+      '<button type="button" class="icon-btn" data-act="remove-extra" aria-label="Remove line">' + ICON.x + '</button></div>' +
+      '<div class="x-bot"><div class="sel"><select class="txt" id="x-phase-' + k + '" data-xk="phase" aria-label="When it bills">' +
+      PHASES.map(ph => '<option value="' + ph[0] + '"' + (x.phase === ph[0] ? ' selected' : '') + '>' + ph[1] + '</option>').join('') + '</select></div>' +
+      '<div class="inp"><input id="x-pct-' + k + '" data-xk="pct" data-pct inputmode="decimal" aria-label="Percent of SOV total" placeholder="0.00" autocomplete="off" value="' + esc(x.pct ? Number(x.pct).toFixed(2) : '') + '"><span class="suf">%</span></div></div>' +
+      '</div>';
+  }
   function renderSettings() {
     const s = state.settings;
     const pct = currentPct();
@@ -1025,6 +1062,11 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     E.GENERAL.forEach(g => {
       h += setRow('pct-' + g.id, 'data-gen="' + g.id + '" data-pct', esc(g.label), 'Range ' + g.low.toFixed(2) + '–' + g.high.toFixed(2) + '% · selected ' + g.sel.toFixed(2) + '% · ' + esc(g.timing.toLowerCase()), Number(pct[g.id]).toFixed(2), '%');
     });
+    if (state.extra.length) {
+      h += '<div class="x-title">Added lines<span class="set-hint">Same percentage in every posture. Review flags a front-end one over ' + MAX_FRONT + '%, the largest in your framework.</span></div>';
+      state.extra.forEach((x, k) => { h += extraRow(x, k); });
+    }
+    h += '<div class="x-add"><button type="button" class="btn small" data-act="add-extra">' + ICON.plus + ' Add general line</button></div>';
     h += '</div>';
 
     h += '<div class="card"><div class="eyebrow">Estimate</div>';
@@ -1136,7 +1178,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const rows = [];
     if (state.project) rows.push(['Project', clean(state.project)]);
     rows.push(['Item No.', 'Description of Work', 'Scheduled Value', '% of Total', 'Billing']);
-    R.lines.forEach(l => rows.push([l.no, clean(l.desc + (l.scope ? ' (' + l.scope + ')' : '')), num(l.value), pc(l.value / R.C), l.timing]));
+    R.lines.forEach(l => rows.push([l.no, clean(l.desc), num(l.value), pc(l.value / R.C), l.timing]));
     rows.push(['', 'Grand Total', num(R.total), '100.00%', '']);
     return rows.map(r => r.join('\t')).join('\n');
   }
@@ -1211,6 +1253,14 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       changed(); renderSystems();
       const el = $('#sys-pr-' + i); if (el) el.focus({ preventScroll: true });
       toast('Profit set to ' + trim4(s.pr) + '%. ' + (s.name || 'System ' + (i + 1)) + ' now ties to its total.');
+    } else if (act === 'add-extra') {
+      state.extra.push(blankExtra());
+      changed(); renderSettings();
+      const el = $('#x-name-' + (state.extra.length - 1));
+      if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+    } else if (act === 'remove-extra') {
+      const k = Number(t.closest('[data-x]').dataset.x);
+      arm(t, 'rx' + k, 'Remove?', () => { state.extra.splice(k, 1); changed(); renderSettings(); });
     } else if (act === 'add-area') {
       state.systems[i].areas.push({ name: '', w: 0 });
       ui.openAreas.add(i);
@@ -1232,7 +1282,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       const el = $('#project'); if (el) el.focus();
     } else if (act === 'reset-settings') {
       arm(t, 'reset', 'Tap again to reset', () => {
-        state.settings = Object.assign({}, E.DEFAULT_SETTINGS); state.posture = 'balanced'; state.custom = null;
+        state.settings = Object.assign({}, E.DEFAULT_SETTINGS); state.posture = 'balanced'; state.custom = null; state.extra = [];
         changed(); renderSettings(); toast('Settings reset to your framework defaults.');
       });
     }
@@ -1267,7 +1317,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     if (!card) return;
     const s = state.systems[Number(card.dataset.i)];
     if (!s) return;
-    if (t.dataset.k) s[t.dataset.k] = (t.dataset.k === 'name' || t.dataset.k === 'scope') ? t.value : parseNum(t.value);
+    if (t.dataset.k) s[t.dataset.k] = t.dataset.k === 'name' ? t.value : parseNum(t.value);
     else if (t.dataset.ak) {
       const a = s.areas[Number(t.closest('[data-a]').dataset.a)];
       if (!a) return;
@@ -1280,9 +1330,20 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const t = ev.target;
     if (t.dataset.gen) { ensureCustom(); state.custom.pct[t.dataset.gen] = parseNum(t.value); }
     else if (t.dataset.set) state.settings[t.dataset.set] = parseNum(t.value);
+    else if (t.dataset.xk) { if (!setExtra(t)) return; }
     else return;
     changed();
   });
+  $('#panel-settings').addEventListener('change', ev => {
+    const t = ev.target;
+    if (t.tagName === 'SELECT' && t.dataset.xk && setExtra(t)) changed();
+  });
+  function setExtra(t) {
+    const x = state.extra[Number(t.closest('[data-x]').dataset.x)];
+    if (!x) return false;
+    x[t.dataset.xk] = t.dataset.xk === 'pct' ? parseNum(t.value) : t.value;
+    return true;
+  }
   // Select the whole number on focus so typing replaces it. The value itself is never rewritten while
   // the field has focus, which would collapse a keyboard user's selection.
   document.addEventListener('focusin', ev => {
@@ -1294,6 +1355,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     if (!t.matches) return;
     if (t.matches('input[data-money]')) t.value = moneyInput(parseNum(t.value));
     else if (t.matches('input[data-gen]')) t.value = parseNum(t.value).toFixed(2);
+    else if (t.matches('input[data-xk="pct"]')) { const n = parseNum(t.value); t.value = n ? n.toFixed(2) : ''; }
     else if (t.matches('input[data-pct4]')) { const n = parseNum(t.value); t.value = (t.dataset.k === 'oh' || t.dataset.k === 'pr') && !n ? '' : trim4(n); }
     else if (t.matches('input[data-pct]')) { const n = parseNum(t.value); t.value = t.dataset.ak === 'w' && !n ? '' : trimNum(n); }
     if (t.closest && t.closest('#panel-settings')) setTimeout(() => { if (!$('#panel-settings').contains(document.activeElement)) renderSettings(); }, 0);
