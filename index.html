@@ -167,7 +167,9 @@ h1, h2 { text-wrap: balance; }
 details.areas { border-top: 1px solid var(--line-2); padding-top: 10px; }
 details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--accent); list-style-position: inside; }
 .area-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.area-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px 38px; gap: 8px; align-items: center; }
+.area-row { display: grid; grid-template-columns: minmax(0, 1fr) 68px minmax(60px, auto) 34px; gap: 6px; align-items: center; }
+.area-row .inp { padding: 0 8px; }
+.area-row .icon-btn { width: 34px; height: 38px; }
 .sys-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .sys-actions .btn { flex: 1 1 160px; }
 
@@ -186,6 +188,14 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 .tie { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 9px 10px; border-radius: 9px; background: var(--surface-2); font-size: 13.5px; color: var(--ink-2); }
 .tie .tie-txt { flex: 1 1 150px; min-width: 0; }
 .tie .btn { min-height: 36px; padding: 6px 10px; font-size: 13.5px; }
+.card.form { display: flex; flex-direction: column; gap: 12px; }
+.form .tie { margin-top: 0; }
+.span2 { grid-column: 1 / -1; min-width: 0; }
+.seg-ctl.yn { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0; }
+.seg-ctl.yn button { padding: 9px 6px; }
+.area-amt { text-align: right; font-weight: 600; font-size: 13.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.area-total { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.area-total:empty { display: none; }
 .total-in { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 172px); gap: 12px; align-items: center; }
 .sys .tie { margin-top: 0; }
 .x-title { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line-2); font-weight: 600; font-size: 14.5px; }
@@ -395,7 +405,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     max: { label: 'Max defensible', front: 'high', tail: 'sel', pm: 'sel' }
   };
 
-  const DEFAULT_SETTINGS = { taxRate: 6.35, laborFloor: 5, matComfort: 10, matCap: 15, retainage: 5, bond: 0, rounding: 50 };
+  const DEFAULT_SETTINGS = { taxRate: 6.35, taxLabor: 6.35, laborFloor: 5, matComfort: 10, matCap: 15, retainage: 5, bond: 0, rounding: 50 };
 
   function num(x) { const n = Number(x); return isFinite(n) ? n : 0; }
   function toCents(d) { return Math.round(num(d) * 100); }
@@ -430,34 +440,42 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     return out.map(x => x * sign);
   }
 
+  // Tax rates as { mat, lab } in percent. A bare number means a material rate only.
+  function taxRates(r) {
+    return r && typeof r === 'object' ? { mat: Math.max(0, num(r.mat)), lab: Math.max(0, num(r.lab)) } : { mat: Math.max(0, num(r)), lab: 0 };
+  }
+
   // The estimate recap, exactly as the estimator prices a system:
   //   Subtotal = material + labor + equipment/fixed
   //   Overhead = OH% x subtotal;  Profit = P% x (subtotal + overhead)
-  //   Tax = tax% x material (not marked up)
-  //   Price = subtotal + overhead + profit + tax, rounded to the dollar for the SOV.
-  function priceSystem(s, taxRate) {
+  //   Material tax = rate x material cost, labor tax = rate x labor cost, each only where the system says Yes (not marked up)
+  //   Price = subtotal + overhead + profit + taxes, rounded to the dollar for the SOV.
+  function priceSystem(s, rates) {
     s = s || {};
+    const tr = taxRates(rates);
     const M = Math.max(0, toCents(s.M)), L = Math.max(0, toCents(s.L)), E = Math.max(0, toCents(s.E));
-    const oh = num(s.oh), pr = num(s.pr), tr = Math.max(0, num(taxRate));
+    const oh = num(s.oh), pr = num(s.pr);
+    const taxM = s.taxM !== false, taxL = s.taxL === true; // material taxed unless switched off; labor only when switched on
     const Sub = M + L + E;
     const OH = Math.round(Sub * oh / 100);
     const SubOH = Sub + OH;
     const PR = Math.round(SubOH * pr / 100);
-    const TAX = Math.round(M * tr / 100);
-    const price = SubOH + PR + TAX;
-    return { M, L, E, oh, pr, Sub, OH, SubOH, PR, TAX, price, V: Math.round(price / 100) * 100 };
+    const TAX = taxM ? Math.round(M * tr.mat / 100) : 0;
+    const TAXL = taxL ? Math.round(L * tr.lab / 100) : 0;
+    const price = SubOH + PR + TAX + TAXL;
+    return { M, L, E, oh, pr, taxM, taxL, rateM: tr.mat, rateL: tr.lab, Sub, OH, SubOH, PR, TAX, TAXL, price, V: Math.round(price / 100) * 100 };
   }
 
   // Profit % (4 decimals) that makes a system price out to the entered total; null if it can't.
-  function tieProfit(s, taxRate, totalDollars) {
+  function tieProfit(s, rates, totalDollars) {
     const T = toCents(totalDollars);
-    const base = priceSystem(Object.assign({}, s, { pr: 0 }), taxRate);
+    const base = priceSystem(Object.assign({}, s, { pr: 0 }), rates);
     if (T <= 0 || base.SubOH <= 0 || T % 100 !== 0) return null;
-    const p0 = (T - base.TAX - base.SubOH) / base.SubOH * 100;
+    const p0 = (T - base.TAX - base.TAXL - base.SubOH) / base.SubOH * 100;
     if (!isFinite(p0) || p0 < 0) return null;
     let p = Math.round(p0 * 1e4) / 1e4;
     for (let k = 0; k < 400; k++) {
-      const v = priceSystem(Object.assign({}, s, { pr: p }), taxRate).V;
+      const v = priceSystem(Object.assign({}, s, { pr: p }), rates).V;
       if (v === T) return p;
       p = Math.round((p + (v < T ? 1e-4 : -1e-4)) * 1e4) / 1e4;
       if (p < 0) return null;
@@ -484,8 +502,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
   function cleanAreas(areas) {
     return (Array.isArray(areas) ? areas : [])
-      .filter(a => a && String(a.name || '').trim())
-      .map(a => ({ name: String(a.name).trim(), w: Math.max(0, num(a.w)) }));
+      .map((a, oi) => ({ oi, name: String((a && a.name) || '').trim(), w: Math.max(0, num(a && a.w)) }))
+      .filter(a => a.name);
   }
 
   function compute(input) {
@@ -496,7 +514,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const matCap = Math.max(0, num(s.matCap)) / 100;
     const matComfort = Math.max(0, num(s.matComfort)) / 100;
     const retPct = Math.max(0, num(s.retainage)) / 100;
-    const taxRate = Math.max(0, num(s.taxRate));
+    const rates = taxRates({ mat: s.taxRate, lab: s.taxLabor });
 
     let posture = input.posture;
     const isCustom = posture === 'custom' && !!input.custom;
@@ -506,7 +524,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const inSys = input.systems || [];
     const all = inSys.map((x, i) => {
       x = x || {};
-      return Object.assign(priceSystem(x, taxRate), {
+      return Object.assign(priceSystem(x, rates), {
         idx: i, name: String(x.name || '').trim() || ('System ' + (i + 1)), scope: String(x.scope || '').trim(),
         T: Math.max(0, toCents(x.total)), areas: cleanAreas(x.areas)
       });
@@ -533,8 +551,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const EQ = sumEqRaw > 0 ? Math.round(sumEqRaw / 100) * 100 : 0;
     const EQalloc = sumEqRaw > 0 ? allocate(EQ, eqRaw, 100) : sys.map(() => 0);
     const mat = sys.map(x => (x.M > 0 ? Math.round((x.M + x.TAX + share(x, x.M)) / 100) * 100 : 0));
-    const labor = sys.map((x, i) => x.V - mat[i] - EQalloc[i] - Galloc[i]); // labor + its profit + overhead the general lines don't use
-    const floor = sys.map(x => Math.ceil(x.L * (1 + f)));
+    const labor = sys.map((x, i) => x.V - mat[i] - EQalloc[i] - Galloc[i]); // labor + labor tax + its profit + overhead the general lines don't use
+    const floor = sys.map(x => Math.ceil(x.L * (1 + f)) + x.TAXL); // labor tax rides in the labor line but isn't margin
     const mk = sys.map((x, i) => (x.M > 0 ? (mat[i] - x.M - x.TAX) / (x.M + x.TAX) : null)); // markup over invoice (material + tax)
 
     // SOV lines in billing order.
@@ -554,14 +572,18 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     sys.forEach((x, i) => {
       if (mat[i] > 0) add('materials', { id: 'mat-' + x.idx, desc: x.name + ': Material', scope: x.scope, value: mat[i], timing: 'Stored / delivered', guide: MAT_GUIDE, sys: x.idx });
     });
+    const areaAmts = sys.map(() => ({}));
     sys.forEach((x, i) => {
       if (labor[i] === 0 && x.L === 0) return;
       if (x.areas.length) {
         const parts = allocate(labor[i], x.areas.map(a => a.w), 100);
-        x.areas.forEach((a, k) => add('labor', {
-          id: 'lab-' + x.idx + '-' + k, desc: x.name + ': Labor, ' + a.name, scope: x.scope,
-          value: parts[k], timing: '% complete', guide: LAB_GUIDE, sys: x.idx
-        }));
+        x.areas.forEach((a, k) => {
+          areaAmts[i][a.oi] = parts[k];
+          add('labor', {
+            id: 'lab-' + x.idx + '-' + a.oi, desc: x.name + ': Labor, ' + a.name, scope: x.scope,
+            value: parts[k], timing: '% complete', guide: LAB_GUIDE, sys: x.idx
+          });
+        });
       } else {
         add('labor', { id: 'lab-' + x.idx, desc: x.name + ': Labor', scope: x.scope, value: labor[i], timing: '% complete', guide: LAB_GUIDE, sys: x.idx });
       }
@@ -581,23 +603,24 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     ];
 
     const tot = k => sys.reduce((a, x) => a + x[k], 0);
-    const sumM = tot('M'), sumL = tot('L'), sumE = tot('E'), sumOH = tot('OH'), sumPR = tot('PR'), sumTAX = tot('TAX');
+    const sumM = tot('M'), sumL = tot('L'), sumE = tot('E'), sumOH = tot('OH'), sumPR = tot('PR'), sumTAX = tot('TAX'), sumTAXL = tot('TAXL');
 
     const preSite = bucket.precon + bucket.materials;   // billable before you're on site (materials only if stored material is paid)
     const atStart = preSite + bucket.start;              // most you can have billed before any installation is earned
     const btf = C - atStart;
-    const remCost = sumL + sumE;
+    const remCost = sumL + sumE + sumTAXL; // labor tax is billed and remitted with the labor still to come
     const btfCov = remCost > 0 ? btf / remCost : null;
     const retainage = Math.round(C * retPct);
 
 
     const sysRows = sys.map((x, i) => ({
-      idx: x.idx, name: x.name, scope: x.scope, V: x.V, price: x.price, M: x.M, L: x.L, E: x.E, OH: x.OH, PR: x.PR, TAX: x.TAX,
-      oh: x.oh, pr: x.pr, mk: mk[i], mat: mat[i], labor: labor[i], eq: EQalloc[i], gen: Galloc[i],
+      idx: x.idx, name: x.name, scope: x.scope, V: x.V, price: x.price, M: x.M, L: x.L, E: x.E, OH: x.OH, PR: x.PR, TAX: x.TAX, TAXL: x.TAXL,
+      oh: x.oh, pr: x.pr, mk: mk[i], mat: mat[i], labor: labor[i], laborNet: labor[i] - x.TAXL, eq: EQalloc[i], gen: Galloc[i],
       total: mat[i] + labor[i] + EQalloc[i] + Galloc[i], floor: floor[i],
-      cov: x.L > 0 ? labor[i] / x.L : null, areas: x.areas.length,
+      cov: x.L > 0 ? (labor[i] - x.TAXL) / x.L : null, areas: x.areas.length, areaAmts: areaAmts[i],
+      areaPct: x.areas.reduce((a, b) => a + b.w, 0),
       T: x.T, tie: x.T > 0 ? x.V === x.T : null,
-      tieP: x.T > 0 && x.V !== x.T ? tieProfit(inSys[x.idx], taxRate, x.T / 100) : null
+      tieP: x.T > 0 && x.V !== x.T ? tieProfit(inSys[x.idx], rates, x.T / 100) : null
     }));
 
     // Review checks.
@@ -635,18 +658,26 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       'Overhead ' + usd(sumOH) + ' against ' + usd(G) + ' of general lines. The extra ' + usd(sumOH - G) + ' goes to labor.');
 
     sysRows.forEach(r => {
-      const cmp = { kind: 'labor', a: r.labor, b: r.L };
+      const cmp = { kind: 'labor', a: r.laborNet, b: r.L, tax: r.TAXL };
       if (r.labor < 0) {
         chk('fix', r.name + ': labor line is negative', 'The general lines take more than this system\'s overhead and labor can carry. Lower the general line percentages or check the inputs.', { sys: r.idx, cmp });
       } else if (r.L === 0) {
         if (r.labor > 0) chk('watch', r.name + ': labor line with no labor cost', 'Overhead and profit are sitting in a labor line with no install estimate behind it. Enter the install cost, or accept it if this is supply-only.', { sys: r.idx });
-      } else if (r.labor < r.L) {
+      } else if (r.laborNet < r.L) {
         chk('fix', r.name + ': labor scheduled below labor cost', 'Once materials are billed, the remaining labor value won\'t cover your crews, and a GC checking unit rates will see it. Lower the general line percentages or raise overhead.', { sys: r.idx, cmp });
       } else if (r.labor < r.floor) {
         chk('watch', r.name + ': labor margin under your ' + fp(f) + ' floor', 'Labor cost is covered, but with less cushion than your floor. Thin labor lines are the first thing a GC questions on a front-loaded SOV.', { sys: r.idx, cmp });
       } else {
         chk('ok', r.name + ': labor covered', 'Scheduled labor stays above cost plus your ' + fp(f) + ' floor.', { sys: r.idx, cmp });
       }
+    });
+
+    sysRows.forEach(r => {
+      if (!r.areas) return;
+      const t = Math.round(r.areaPct * 100) / 100;
+      if (t === 0) chk('watch', r.name + ': labor areas have no percentages', 'Labor is split evenly across the areas until you enter a percentage for each.', { sys: r.idx });
+      else if (Math.abs(t - 100) > 0.005) chk('watch', r.name + ': labor areas add up to ' + t + '%',
+        'The SOV scales them so all of this system\'s labor is billed. Make them add up to 100% so each area\'s dollars match its percentage.', { sys: r.idx });
     });
 
     const withMat = sysRows.filter(r => r.M > 0);
@@ -704,13 +735,13 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
     return {
       empty: false, C, total, cents, contract, posture: isCustom ? 'custom' : posture, isCustom, pct,
-      matCap, matComfort, floorPct: f, retPct, taxRate,
-      sumM, sumL, sumE, sumOH, sumPR, sumTAX, EQ, bond, G, gen, extra, lines, buckets, preSite, atStart, btf, remCost, btfCov,
+      matCap, matComfort, floorPct: f, retPct, rates,
+      sumM, sumL, sumE, sumOH, sumPR, sumTAX, sumTAXL, EQ, bond, G, gen, extra, lines, buckets, preSite, atStart, btf, remCost, btfCov,
       retainage, sysRows, checks, counts, badSys
     };
   }
 
-  const api = { GENERAL, EQUIP, POSTURES, PHASE_TIMING, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, allocate, toCents };
+  const api = { GENERAL, EQUIP, POSTURES, PHASE_TIMING, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, taxRates, allocate, toCents };
   root.SOVEngine = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -750,16 +781,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   const LEVEL_WORD = { ok: 'OK', watch: 'Watch', fix: 'Fix' };
   const statusIcon = lvl => '<span class="sic ' + lvl + '" role="img" aria-label="' + LEVEL_WORD[lvl] + '">' + GLYPH[lvl] + '</span>';
 
-  const blankSystem = () => ({ name: '', total: 0, M: 0, L: 0, E: 0, oh: 0, pr: 0, areas: [] });
+  const blankSystem = () => ({ name: '', total: 0, M: 0, L: 0, E: 0, oh: 0, pr: 0, taxM: true, taxL: false, areas: [] });
   const blankExtra = () => ({ name: '', pct: 0, phase: 'ongoing' });
   const exampleState = () => ({
     v: 2, isExample: true, tab: 'sov', project: 'Example: Warehouse Addition', contract: 599687,
     posture: 'balanced', custom: null, settings: Object.assign({}, E.DEFAULT_SETTINGS), extra: [],
     systems: [
-      { name: 'Insulated Metal Panels (IMP)', total: 427282, M: 212000, L: 118000, E: 12000, oh: 10, pr: 10,
+      { name: 'Insulated Metal Panels (IMP)', total: 427282, M: 212000, L: 118000, E: 12000, oh: 10, pr: 10, taxM: true, taxL: false,
         areas: [{ name: 'North Elevation', w: 35 }, { name: 'West Elevation', w: 25 }, { name: 'South Elevation', w: 40 }] },
-      { name: 'Fiber Cement Panels', total: 150360, M: 48000, L: 71000, E: 5000, oh: 10, pr: 8, areas: [] },
-      { name: 'Aluminum Canopy', total: 22045, M: 11800, L: 5200, E: 600, oh: 10, pr: 10, areas: [] }
+      { name: 'Fiber Cement Panels', total: 150360, M: 48000, L: 71000, E: 5000, oh: 10, pr: 8, taxM: true, taxL: false, areas: [] },
+      { name: 'Aluminum Canopy', total: 22045, M: 11800, L: 5200, E: 600, oh: 10, pr: 10, taxM: true, taxL: false, areas: [] }
     ]
   });
 
@@ -806,7 +837,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   let R = null;
   const ui = { expanded: new Set(), armed: {}, openAreas: new Set(), hl: null };
   const recompute = () => { R = E.compute(state); };
-  const taxRate = () => Math.max(0, Number(state.settings.taxRate) || 0);
+  const rates = () => ({ mat: Math.max(0, Number(state.settings.taxRate) || 0), lab: Math.max(0, Number(state.settings.taxLabor) || 0) });
 
   /* ---------- shared bits ---------- */
   function exampleBanner() {
@@ -829,45 +860,65 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const id = 'sys-' + k + '-' + i;
     return '<div class="field"><label for="' + id + '">' + label + '</label><div class="inp"><input id="' + id + '" data-k="' + k + '" data-pct4 inputmode="decimal" autocomplete="off" placeholder="0" value="' + esc(v ? trim4(v) : '') + '"><span class="suf">%</span></div></div>';
   }
+  function taxToggle(i, key, label, on) {
+    const lid = 'tx-' + key + '-' + i;
+    return '<div class="field"><span class="lbl" id="' + lid + '">' + label + '</span>' +
+      '<div class="seg-ctl yn" role="group" aria-labelledby="' + lid + '">' +
+      '<button type="button" data-tax="' + key + '" data-v="1" aria-pressed="' + on + '">Yes</button>' +
+      '<button type="button" data-tax="' + key + '" data-v="0" aria-pressed="' + !on + '">No</button></div></div>';
+  }
+  function areaRow(i, a, k) {
+    return '<div class="area-row" data-a="' + k + '">' +
+      '<input class="txt" id="area-name-' + i + '-' + k + '" data-ak="name" aria-label="Labor description" placeholder="North Elevation" autocomplete="off" value="' + esc(a.name) + '">' +
+      '<div class="inp"><input id="area-w-' + i + '-' + k + '" data-ak="w" data-pct inputmode="decimal" aria-label="Share of labor" placeholder="0" autocomplete="off" value="' + esc(a.w ? trimNum(a.w) : '') + '"><span class="suf">%</span></div>' +
+      '<span class="area-amt" id="area-amt-' + i + '-' + k + '">—</span>' +
+      '<button type="button" class="icon-btn" data-act="remove-area" aria-label="Remove area">' + ICON.x + '</button></div>';
+  }
+  // Card order: name, system total, overhead and profit on their own row, then costs, tax switches and the price recap.
   function systemCard(s, i) {
     const open = s.areas.length > 0 || ui.openAreas.has(i);
-    let areas = '';
-    s.areas.forEach((a, k) => {
-      areas += '<div class="area-row" data-a="' + k + '">' +
-        '<input class="txt" id="area-name-' + i + '-' + k + '" data-ak="name" aria-label="Area name" placeholder="North Elevation" autocomplete="off" value="' + esc(a.name) + '">' +
-        '<div class="inp"><input id="area-w-' + i + '-' + k + '" data-ak="w" data-pct inputmode="decimal" aria-label="Weight" placeholder="0" autocomplete="off" value="' + esc(a.w ? trimNum(a.w) : '') + '"><span class="suf">%</span></div>' +
-        '<button type="button" class="icon-btn" data-act="remove-area" aria-label="Remove area">' + ICON.x + '</button></div>';
-    });
     return '<section class="card sys" data-i="' + i + '" aria-label="System ' + (i + 1) + '">' +
       '<div class="sys-head"><div class="field"><label for="sys-name-' + i + '">System ' + (i + 1) + '</label>' +
       '<input class="txt strong" id="sys-name-' + i + '" data-k="name" list="sys-names" autocomplete="off" placeholder="Insulated Metal Panels (IMP)" value="' + esc(s.name) + '"></div>' +
       '<button type="button" class="icon-btn" data-act="remove-system" aria-label="Remove system ' + (i + 1) + '">' + ICON.x + '</button></div>' +
-      '<div class="grid2">' + moneyField(i, 'M', 'Material', s.M) + moneyField(i, 'L', 'Labor', s.L) + moneyField(i, 'E', 'Equipment / fixed', s.E) +
-      '<div class="pair">' + pctField(i, 'oh', 'Overhead', s.oh) + pctField(i, 'pr', 'Profit', s.pr) + '</div></div>' +
+      moneyField(i, 'total', 'System total', s.total) +
+      '<div class="grid2">' + pctField(i, 'oh', 'Overhead', s.oh) + pctField(i, 'pr', 'Profit', s.pr) + '</div>' +
+      '<div class="grid2">' + moneyField(i, 'M', 'Material', s.M) + moneyField(i, 'L', 'Labor', s.L) +
+      '<div class="span2">' + moneyField(i, 'E', 'Equipment / fixed', s.E) + '</div></div>' +
+      '<div class="grid2">' + taxToggle(i, 'taxM', 'Sales tax on material', s.taxM !== false) + taxToggle(i, 'taxL', 'Sales tax on labor', s.taxL === true) + '</div>' +
       '<div class="recap" id="sys-recap-' + i + '"></div>' +
-      '<div class="total-in"><label for="sys-total-' + i + '" class="set-name">System total<span class="set-hint">Awarded value to check the price against</span></label>' +
-      '<div class="inp"><span class="pre">$</span><input id="sys-total-' + i + '" data-k="total" data-money inputmode="decimal" autocomplete="off" placeholder="0.00" value="' + esc(moneyInput(s.total)) + '"></div></div>' +
       '<div id="sys-tie-' + i + '" aria-live="polite"></div>' +
       '<details class="areas" data-i="' + i + '"' + (open ? ' open' : '') + '><summary>Split labor by area</summary>' +
-      '<div class="area-list">' + areas +
+      '<div class="area-list">' + s.areas.map((a, k) => areaRow(i, a, k)).join('') +
+      '<div class="area-total" id="area-total-' + i + '" aria-live="polite"></div>' +
       '<div><button type="button" class="btn small" data-act="add-area">' + ICON.plus + ' Add area</button></div>' +
-      '<p class="note">Labor splits by these weights. They don\'t need to add up to 100.</p></div></details>' +
+      '<p class="note">Enter each area\'s share of this system\'s labor line. The shares should add up to 100%.</p></div></details>' +
       '</section>';
   }
   function recapHTML(s) {
-    const tr = taxRate();
-    const p = E.priceSystem(s, tr);
+    const p = E.priceSystem(s, rates());
     if (p.Sub <= 0) return '<p class="note">Enter material, labor and equipment cost to price this system.</p>';
     let h = '<div class="rc"><span>Subtotal</span><span>' + money2(p.Sub) + '</span></div>' +
       '<div class="rc"><span>Overhead ' + trim4(p.oh) + '%</span><span>' + money2(p.OH) + '</span></div>' +
-      '<div class="rc"><span>Profit ' + trim4(p.pr) + '% on subtotal + overhead</span><span>' + money2(p.PR) + '</span></div>' +
-      '<div class="rc"><span>Sales tax ' + trim4(tr) + '% on material</span><span>' + money2(p.TAX) + '</span></div>' +
-      '<div class="rc tot"><span>System price</span><span>' + money2(p.price) + '</span></div>';
+      '<div class="rc"><span>Profit ' + trim4(p.pr) + '% on subtotal + overhead</span><span>' + money2(p.PR) + '</span></div>';
+    if (p.taxM) h += '<div class="rc"><span>Sales tax ' + trim4(p.rateM) + '% on material</span><span>' + money2(p.TAX) + '</span></div>';
+    if (p.taxL) h += '<div class="rc"><span>Sales tax ' + trim4(p.rateL) + '% on labor</span><span>' + money2(p.TAXL) + '</span></div>';
+    if (!p.taxM && !p.taxL) h += '<div class="rc"><span>No sales tax</span><span>' + money2(0) + '</span></div>';
+    h += '<div class="rc tot"><span>System price</span><span>' + money2(p.price) + '</span></div>';
     if (p.price !== p.V) h += '<div class="rc sub"><span>Rounded for the SOV</span><span>' + money2(p.V) + '</span></div>';
     return h;
   }
+  function areaTotalHTML(s, row) {
+    const named = s.areas.filter(a => String(a.name || '').trim());
+    if (!named.length) return s.areas.length ? '<span class="note">Describe each area to add it to the SOV.</span>' : '';
+    const t = Math.round(named.reduce((a, x) => a + (Number(x.w) || 0), 0) * 100) / 100;
+    const lab = row ? money(row.labor, R.cents) : '—';
+    if (t === 100) return statusIcon('ok') + '<span>Total 100% · ' + lab + ', all of this system\'s labor</span>';
+    if (t === 0) return statusIcon('watch') + '<span>No shares entered yet, so labor splits evenly.</span>';
+    return statusIcon('watch') + '<span>Total ' + t + '%. The SOV scales these amounts so all ' + lab + ' of labor still gets billed.</span>';
+  }
   function tieHTML(s) {
-    const tr = taxRate();
+    const tr = rates();
     const p = E.priceSystem(s, tr);
     if (p.Sub <= 0) return '';
     const T = E.toCents(s.total);
@@ -888,8 +939,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   }
   function renderSystems() {
     let h = exampleBanner();
-    h += '<div class="card"><div class="grid2"><div class="field"><label for="project">Project</label><input class="txt" id="project" autocomplete="off" placeholder="Project name" value="' + esc(state.project) + '"></div>' +
-      '<div class="field"><label for="contract">Contract sum</label><div class="inp"><span class="pre">$</span><input id="contract" data-money inputmode="decimal" autocomplete="off" placeholder="0.00" value="' + esc(moneyInput(state.contract)) + '"></div></div></div>' +
+    h += '<div class="card form"><div class="field"><label for="project">Project</label><input class="txt" id="project" autocomplete="off" placeholder="Project name" value="' + esc(state.project) + '"></div>' +
+      '<div class="field"><label for="contract">Contract sum</label><div class="inp"><span class="pre">$</span><input id="contract" data-money inputmode="decimal" autocomplete="off" placeholder="0.00" value="' + esc(moneyInput(state.contract)) + '"></div></div>' +
       '<div id="contract-tie" aria-live="polite"></div></div>';
     state.systems.forEach((s, i) => { h += systemCard(s, i); });
     h += '<div class="sys-actions"><button type="button" class="btn" data-act="add-system">' + ICON.plus + ' Add system</button><button type="button" class="btn ghost" data-act="clear-all">Clear all</button></div>';
@@ -900,6 +951,12 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     state.systems.forEach((s, i) => {
       const el = $('#sys-recap-' + i); if (el) el.innerHTML = recapHTML(s);
       const tie = $('#sys-tie-' + i); if (tie) tie.innerHTML = tieHTML(s);
+      const row = R && !R.empty ? R.sysRows.find(r => r.idx === i) : null;
+      s.areas.forEach((a, k) => {
+        const amt = $('#area-amt-' + i + '-' + k);
+        if (amt) amt.textContent = row && row.areaAmts && row.areaAmts[k] != null ? money(row.areaAmts[k], R.cents) : '—';
+      });
+      const at = $('#area-total-' + i); if (at) at.innerHTML = areaTotalHTML(s, row);
     });
     const ct = $('#contract-tie');
     if (ct) ct.innerHTML = contractTieHTML();
@@ -991,7 +1048,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     let cmp = '';
     if (c.cmp && c.cmp.kind === 'labor') {
       const d = c.cmp.b ? c.cmp.a / c.cmp.b - 1 : 0;
-      cmp = '<div class="ck-cmp">Scheduled ' + money(c.cmp.a) + ' · cost ' + money(c.cmp.b) + ' · ' + (d >= 0 ? '+' : '−') + pc1(Math.abs(d)) + '</div>';
+      cmp = '<div class="ck-cmp">Scheduled ' + money(c.cmp.a) + (c.cmp.tax ? ' plus ' + money(c.cmp.tax) + ' labor tax' : '') + ' · cost ' + money(c.cmp.b) + ' · ' + (d >= 0 ? '+' : '−') + pc1(Math.abs(d)) + '</div>';
     } else if (c.cmp && c.cmp.kind === 'btf') {
       cmp = '<div class="ck-cmp">Left after site start ' + money(c.cmp.a) + ' · labor + equipment still to come ' + money(c.cmp.b) + '</div>';
     }
@@ -1015,18 +1072,18 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
 
     h += '<div class="card"><div class="eyebrow">Scope reconciliation</div><p class="note" style="margin-top:4px">Each system\'s lines plus its share of the shared lines add back to its price. Same test as the Scope Reconciliation sheet.</p>';
     R.sysRows.forEach(r => {
-      const d = r.L > 0 ? r.labor / r.L - 1 : null;
+      const d = r.L > 0 ? r.laborNet / r.L - 1 : null;
       let tie;
       if (r.tie === true) tie = '<div class="rc-cov">' + statusIcon('ok') + ' Ties to the ' + moneyAuto(r.T) + ' system total</div>';
       else if (r.tie === false) tie = '<div class="rc-cov">' + statusIcon('fix') + ' ' + offTxt(r.V, r.T) + ' the ' + moneyAuto(r.T) + ' system total</div>';
       else tie = '<div class="rc-cov">No system total entered</div>';
       h += '<div class="recon"><div class="rc-head"><span class="rc-name">' + esc(r.name) + '</span><span class="rc-v">' + money(r.V, R.cents) + '</span></div><dl>' +
         '<dt>Material' + (r.M > 0 ? ' <span class="muted">(with tax, ' + pc1(r.mk) + ' over invoice)</span>' : '') + '</dt><dd>' + money(r.mat, R.cents) + '</dd>' +
-        '<dt>Labor' + (r.areas ? ' <span class="muted">(' + r.areas + ' areas)</span>' : '') + '</dt><dd' + (r.labor < 0 ? ' class="neg"' : '') + '>' + money(r.labor, R.cents) + '</dd>' +
+        '<dt>Labor' + (r.areas || r.TAXL ? ' <span class="muted">(' + [r.areas ? r.areas + ' areas' : '', r.TAXL ? 'with ' + money(r.TAXL) + ' tax' : ''].filter(Boolean).join(', ') + ')</span>' : '') + '</dt><dd' + (r.labor < 0 ? ' class="neg"' : '') + '>' + money(r.labor, R.cents) + '</dd>' +
         '<dt>Equipment share</dt><dd>' + money(r.eq, R.cents) + '</dd>' +
         '<dt>Shared general lines</dt><dd>' + money(r.gen, R.cents) + '</dd>' +
         '<dt class="rc-tot">System price</dt><dd class="rc-tot">' + money(r.total, R.cents) + '</dd></dl>' + tie +
-        (d !== null ? '<div class="rc-cov">Labor ' + money(r.labor) + ' against cost ' + money(r.L) + ' · ' + (d >= 0 ? '+' : '−') + pc1(Math.abs(d)) + '</div>' : '') + '</div>';
+        (d !== null ? '<div class="rc-cov">Labor ' + money(r.laborNet) + (r.TAXL ? ' before tax' : '') + ' against cost ' + money(r.L) + ' · ' + (d >= 0 ? '+' : '−') + pc1(Math.abs(d)) + '</div>' : '') + '</div>';
     });
     h += '<p class="note" style="margin-top:10px">Shared general lines are split by system price. The equipment line is split by each system\'s equipment cost plus its profit.</p></div>';
     el.innerHTML = h;
@@ -1070,7 +1127,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     h += '</div>';
 
     h += '<div class="card"><div class="eyebrow">Estimate</div>';
-    h += setRow('set-taxRate', 'data-set="taxRate" data-pct4', 'Sales tax on material', 'Added to material cost and billed with it, not marked up. Use 0 for a tax-exempt job', trim4(s.taxRate), '%');
+    h += setRow('set-taxRate', 'data-set="taxRate" data-pct4', 'Sales tax on material', 'Used by systems set to Yes. Added to material cost and billed with it, not marked up', trim4(s.taxRate), '%');
+    h += setRow('set-taxLabor', 'data-set="taxLabor" data-pct4', 'Sales tax on labor', 'Used by systems set to Yes. Added to labor cost and billed with labor, not marked up', trim4(s.taxLabor), '%');
     h += '</div>';
 
     h += '<div class="card"><div class="eyebrow">Guardrails</div><p class="note" style="margin-top:4px">These are judgment calls, not contract terms. Set them to what your GCs actually accept.</p>';
@@ -1220,6 +1278,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     if (t.classList.contains('tab')) { setTab(t.dataset.tab); return; }
     if (t.dataset.go) { setTab(t.dataset.go); return; }
     if (t.dataset.posture) { state.posture = t.dataset.posture; changed(); return; }
+    if (t.dataset.tax) {
+      const card = t.closest('[data-i]');
+      const s = card && state.systems[Number(card.dataset.i)];
+      if (!s) return;
+      s[t.dataset.tax] = t.dataset.v === '1';
+      $$('[data-tax="' + t.dataset.tax + '"]', card).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === t.dataset.v)));
+      dropExample();
+      changed();
+      return;
+    }
     if (t.dataset.round) {
       state.settings.rounding = Number(t.dataset.round); changed(); renderSettings();
       const b = $('[data-round="' + t.dataset.round + '"]'); if (b) b.focus({ preventScroll: true });
