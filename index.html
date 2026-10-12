@@ -538,7 +538,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     GENERAL.forEach(g => { pct[g.id] = Math.max(0, num(pct[g.id])); });
 
     // General lines: % of the SOV total, rounded to the chosen unit. Overhead is what pays for them.
-    const gen = GENERAL.map(g => Object.assign({}, g, { pct: pct[g.id], value: roundTo(C * pct[g.id] / 100, R) }));
+    // Lines entered as dollar amounts (shop drawings, PM) bill exactly that; their % is derived for the range checks.
+    const amounts = input.amounts || {};
+    const gen = GENERAL.map(g => {
+      if (amounts[g.id] != null && amounts[g.id] !== '') {
+        const value = Math.max(0, toCents(amounts[g.id]));
+        return Object.assign({}, g, { pct: value / C * 100, value, fixed: true });
+      }
+      return Object.assign({}, g, { pct: pct[g.id], value: roundTo(C * pct[g.id] / 100, R) });
+    });
+    gen.forEach(g => { pct[g.id] = g.pct; });
     const extra = cleanExtra(input.extra).map(x => Object.assign(x, { value: roundTo(C * x.pct / 100, R) }));
     const bond = Math.max(0, toCents(s.bond));
     const G = gen.reduce((a, g) => a + g.value, 0) + extra.reduce((a, x) => a + x.value, 0) + bond;
@@ -741,7 +750,8 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     };
   }
 
-  const api = { GENERAL, EQUIP, POSTURES, PHASE_TIMING, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, taxRates, allocate, toCents };
+  const DOLLAR_LINES = ['shops', 'pm'];
+  const api = { DOLLAR_LINES, GENERAL, EQUIP, POSTURES, PHASE_TIMING, DEFAULT_SETTINGS, compute, presetPct, priceSystem, tieProfit, taxRates, allocate, toCents };
   root.SOVEngine = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -785,7 +795,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
   const blankExtra = () => ({ name: '', pct: 0, phase: 'ongoing' });
   const exampleState = () => ({
     v: 2, isExample: true, tab: 'sov', project: 'Example: Warehouse Addition', contract: 599687,
-    posture: 'balanced', custom: null, settings: Object.assign({}, E.DEFAULT_SETTINGS), extra: [],
+    posture: 'balanced', custom: null, settings: Object.assign({}, E.DEFAULT_SETTINGS), extra: [], amounts: { shops: 7200, pm: 18650 },
     systems: [
       { name: 'Insulated Metal Panels (IMP)', total: 427282, M: 212000, L: 118000, E: 12000, oh: 10, pr: 10, taxM: true, taxL: false,
         areas: [{ name: 'North Elevation', w: 35 }, { name: 'West Elevation', w: 25 }, { name: 'South Elevation', w: 40 }] },
@@ -820,6 +830,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       if (s.v === 1) { if (s.isExample) return null; s = migrateV1(s); }
       if (s.v !== 2) return null;
       s.settings = Object.assign({}, E.DEFAULT_SETTINGS, s.settings || {});
+      if (!s.amounts || typeof s.amounts !== 'object') s.amounts = null; // filled from the current percentages on first render
       s.extra = Array.isArray(s.extra) ? s.extra.filter(x => x && typeof x === 'object').map(x => Object.assign(blankExtra(), x)) : [];
       s.systems = s.systems.map(x => Object.assign(blankSystem(), x, { areas: Array.isArray(x && x.areas) ? x.areas : [] }));
       if (!s.systems.length) s.systems.push(blankSystem());
@@ -1117,6 +1128,13 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     let h = '<div class="card"><div class="eyebrow">General line percentages</div><p class="note" style="margin-top:4px">' +
       (custom ? 'Custom values.' : 'Showing the ' + esc(postureLabel(state.posture)) + ' preset.') + ' Editing a line switches the SOV to Custom. These are paid for by overhead.</p>';
     E.GENERAL.forEach(g => {
+      if (E.DOLLAR_LINES.indexOf(g.id) >= 0) {
+        const C = R.empty ? 0 : R.C;
+        const now = R.empty ? '' : ' · now ' + Number(R.pct[g.id]).toFixed(2) + '%';
+        const rng = C ? ' ($' + nf0.format(Math.round(C * g.low / 10000)) + '–$' + nf0.format(Math.round(C * g.high / 10000)) + ' on this SOV)' : '';
+        h += setRow('amt-' + g.id, 'data-amt="' + g.id + '" data-money', esc(g.label), 'Dollar amount. Range ' + g.low.toFixed(2) + '–' + g.high.toFixed(2) + '%' + rng + now + ' · ' + esc(g.timing.toLowerCase()), moneyInput(state.amounts[g.id]), '', '$');
+        return;
+      }
       h += setRow('pct-' + g.id, 'data-gen="' + g.id + '" data-pct', esc(g.label), 'Range ' + g.low.toFixed(2) + '–' + g.high.toFixed(2) + '% · selected ' + g.sel.toFixed(2) + '% · ' + esc(g.timing.toLowerCase()), Number(pct[g.id]).toFixed(2), '%');
     });
     if (state.extra.length) {
@@ -1202,7 +1220,14 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     if (key && keepFocus) { const el = $(key); if (el && el !== document.activeElement) el.focus({ preventScroll: true }); }
   }
   function changed() { recompute(); renderResults(); save(); }
-  function renderAll() { recompute(); renderSystems(); renderSettings(); renderResults(); }
+  // Shop drawings and PM are entered in dollars. Seed them once from the framework percentages.
+  function seedAmounts() {
+    if (state.amounts) return;
+    state.amounts = {};
+    const r = E.compute(Object.assign({}, state, { amounts: {} }));
+    E.DOLLAR_LINES.forEach(id => { state.amounts[id] = r.empty ? 0 : Math.round(r.gen.find(g => g.id === id).value / 100); });
+  }
+  function renderAll() { seedAmounts(); recompute(); renderSystems(); renderSettings(); renderResults(); }
 
   function dropExample() {
     if (!state.isExample) return;
@@ -1341,16 +1366,16 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
       renderSystems(); changed();
     } else if (act === 'clear-all') {
       arm(t, 'clear', 'Tap again to clear everything', () => {
-        state.systems = [blankSystem()]; state.project = ''; state.contract = 0; state.isExample = false; ui.openAreas.clear();
+        state.systems = [blankSystem()]; state.project = ''; state.contract = 0; state.isExample = false; state.amounts = { shops: 0, pm: 0 }; ui.openAreas.clear();
         renderSystems(); changed();
       });
     } else if (act === 'start-blank') {
-      state.systems = [blankSystem()]; state.project = ''; state.contract = 0; state.isExample = false; ui.openAreas.clear();
+      state.systems = [blankSystem()]; state.project = ''; state.contract = 0; state.isExample = false; state.amounts = { shops: 0, pm: 0 }; ui.openAreas.clear();
       renderSystems(); changed(); setTab('systems');
       const el = $('#project'); if (el) el.focus();
     } else if (act === 'reset-settings') {
       arm(t, 'reset', 'Tap again to reset', () => {
-        state.settings = Object.assign({}, E.DEFAULT_SETTINGS); state.posture = 'balanced'; state.custom = null; state.extra = [];
+        state.settings = Object.assign({}, E.DEFAULT_SETTINGS); state.posture = 'balanced'; state.custom = null; state.extra = []; state.amounts = null;
         changed(); renderSettings(); toast('Settings reset to your framework defaults.');
       });
     }
@@ -1398,6 +1423,7 @@ details.areas summary { cursor: pointer; font-weight: 600; font-size: 14px; colo
     const t = ev.target;
     if (t.dataset.gen) { ensureCustom(); state.custom.pct[t.dataset.gen] = parseNum(t.value); }
     else if (t.dataset.set) state.settings[t.dataset.set] = parseNum(t.value);
+    else if (t.dataset.amt) state.amounts[t.dataset.amt] = parseNum(t.value);
     else if (t.dataset.xk) { if (!setExtra(t)) return; }
     else return;
     changed();
